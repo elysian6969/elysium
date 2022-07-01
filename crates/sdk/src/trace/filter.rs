@@ -5,9 +5,8 @@ struct VTable<F>
 where
     F: super::Filter,
 {
-    should_hit_entity:
-        unsafe extern "C" fn(this: *const Filter<F>, entity: *const (), mask: i32) -> bool,
-    get_trace_kind: unsafe extern "C" fn(this: *const Filter<F>) -> TraceKind,
+    should_hit: unsafe extern "C" fn(this: *const Filter<F>, entity: *const u8, mask: i32) -> bool,
+    trace_kind: unsafe extern "C" fn(this: *const Filter<F>) -> TraceKind,
 }
 
 #[repr(C)]
@@ -27,34 +26,30 @@ where
     pub const fn new(filter: F) -> Self {
         Self {
             vtable: &VTable {
-                should_hit_entity,
-                get_trace_kind,
+                should_hit,
+                trace_kind,
             },
             filter,
         }
     }
 
-    pub const fn as_ptr(&self) -> *const () {
-        self as *const Self as *const ()
+    pub const fn as_ptr(&self) -> *const u8 {
+        self as *const Self as *const u8
     }
 }
 
 // error[E0570]: `"thiscall"` is not a supported ABI for the current target
-unsafe extern "C" fn should_hit_entity<F>(
-    this: *const Filter<F>,
-    entity: *const (),
-    mask: i32,
-) -> bool
+unsafe extern "C" fn should_hit<F>(this: *const Filter<F>, entity: *const u8, mask: i32) -> bool
 where
     F: super::Filter,
 {
-    (*this).filter.should_hit_entity(entity, mask)
+    (*this).filter.should_hit(entity, mask)
 }
 
 // error[E0570]: `"thiscall"` is not a supported ABI for the current target
-unsafe extern "C" fn get_trace_kind<F>(this: *const Filter<F>) -> TraceKind
+unsafe extern "C" fn trace_kind<F>(this: *const Filter<F>) -> TraceKind
 where
     F: super::Filter,
 {
-    (*this).filter.get_trace_kind()
+    (*this).filter.trace_kind()
 }

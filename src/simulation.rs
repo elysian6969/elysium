@@ -1,23 +1,42 @@
+use crate::{state, Entity};
+use core::ptr;
 use elysium_math::Vec3;
+use elysium_sdk::trace::{Contents, Filter, Mask, Ray, Summary, SurfaceFlags, TraceKind};
+use elysium_sdk::Trace;
 
-const SURF_LIGHT: u32 = 0x0001; // value will hold the light strength
-const SURF_SKY2D: u32 = 0x0002; // don't draw, indicates we should skylight draw 2d sky but not draw the 3D skybox
-const SURF_SKY: u32 = 0x0004; // don't draw, but add to skybox
-const SURF_WARP: u32 = 0x0008; // turbulent water warp
-const SURF_TRANS: u32 = 0x0010;
-const SURF_NOPORTAL: u32 = 0x0020; // the surface can not have a portal placed on it
-const SURF_TRIGGER: u32 = 0x0040; // FIXME: This is an xbox hack to work around elimination of trigger surfaces, which breaks occluders
-const SURF_NODRAW: u32 = 0x0080; // don't bother referencing the texture
-const SURF_HINT: u32 = 0x0100; // make a primary bsp splitter
-const SURF_SKIP: u32 = 0x0200; // completely ignore, allowing non-closed brushes
-const SURF_NOLIGHT: u32 = 0x0400; // Don't calculate light
-const SURF_BUMPLIGHT: u32 = 0x0800; // calculate three lightmaps for the surface for bumpmapping
-const SURF_NOSHADOWS: u32 = 0x1000; // Don't receive shadows
-const SURF_NODECALS: u32 = 0x2000; // Don't receive decals
-const SURF_NOPAINT: u32 = SURF_NODECALS; // the surface can not have paint placed on it
-const SURF_NOCHOP: u32 = 0x4000; // Don't subdivide patches on this surface
-const SURF_HITBOX: u32 = 0x8000; // surface is part of a hitbox
-const MASK_ALL: u32 = 0xFFFFFFFF;
+const STEP_F32: f32 = 4.0;
+const STEP_VEC: Vec3 = Vec3::splat(STEP_F32);
+
+struct SkipEntity {
+    entity: *const Entity,
+}
+
+impl Filter for SkipEntity {
+    fn should_hit(&self, entity: *const u8, mask: i32) -> bool {
+        self.entity == entity.cast()
+    }
+
+    fn trace_kind(&self) -> TraceKind {
+        TraceKind::Everything
+    }
+}
+
+fn skip(entity: *const Entity) -> SkipEntity {
+    SkipEntity { entity }
+}
+
+pub struct ShotData {
+    pub source: Vec3,
+    pub enter_summary: Summary,
+    pub direction: Vec3,
+    pub filter: *const Entity,
+    pub trace_length: f32,
+    pub trace_length_remaining: f32,
+    pub current_damage: f32,
+    pub penetrate_count: i32,
+}
+
+const IDK_MASK: u32 = Mask::SHOT_HULL.0 | Contents::HITBOX.0;
 
 fn trace_to_exit(
     start: Vec3,
@@ -26,90 +45,78 @@ fn trace_to_exit(
     exit_summary: &mut Summary,
     end: &mut Vec3,
 ) -> bool {
-    println!("{start:?} {direction:?} {enter_summary:?} {exit_summary:?} {end:?}");
+    let trace = &*state::trace().cast::<Trace>();
+    let iter = (0..=90).step_by(4).map(f32::from);
 
-    let global = Global::handle();
-    let mut distance = 0.0;
-
-    while distance <= 90.0 {
-        distance += 4.0;
-
+    for distance in iter {
         *end = start + direction * Vec3::splat(distance);
 
-        let contents = global.ray_tracer().point_contents(
-            *end,
-            Contents::new().mask_shot_hull().hitbox(),
-            ptr::null(),
+        let contents = trace.point_contents(
+            /* position: Vec3 */ *end,
+            /* contents: u32 */ IDK_MASK,
+            /* entities: *const *const u8 */ ptr::null(),
         );
 
-        if contents.has_mask_shot_hull() && contents.has_hitbox() {
+        let has_mask_shot_hull = contents & !Mask::SHOT_HULL.0 != 0;
+        let has_hitbox = contents & !Contents::HITBOX.0 != 0;
+
+        if has_mask_shot_hull && has_hitbox {
             continue;
         }
 
-        let new_end = *end - (direction * Vec3::splat(4.0));
+        let new_end = *end - (direction * STEP_VEC);
 
-        global.ray_tracer().trace_mut(
-            &Ray::new(*end, new_end),
-            Contents::new().mask_shot().hitbox(),
-            None,
-            exit_summary,
+        trace.trace(
+            /* ray: Ray */ Ray::new(*end, new_end),
+            /* contents: u32 */ IDK_MASK,
+            /* filter */ skip(local),
         );
 
-        if exit_summary.start_solid && (exit_summary.surface.flags & SURF_HITBOX as u16) != 0 {
-            unsafe {
-                global.ray_tracer().trace_filtered_unchecked(
-                    &Ray::new(*end, start),
-                    Contents::new().mask_shot_hull().hitbox(),
-                    exit_summary.entity_hit,
-                    exit_summary,
-                );
-            }
+        if exit_summary.start_within_solid && exit_summary.has_flag(SurfaceFlags::HITBOX) {
+            trace.trace(
+                Ray::new(*end, start),
+                IDK_MASK,
+                skip(exit_summary.entity.cast()),
+            );
 
-            if (exit_summary.fraction <= 1.0 || exit_summary.all_solid) && !exit_summary.start_solid
+            if (exit_summary.fraction <= 1.0 || exit_summary.within_solid)
+                && !exit_summary.start_within_solid
             {
-                *end = exit_summary.end;
+                *end = exit_summary.hit_pos;
                 return true;
             }
 
             continue;
         }
 
-        if !(exit_summary.fraction <= 1.0 || exit_summary.all_solid || exit_summary.start_solid)
-            || exit_summary.start_solid
+        if !(exit_summary.fraction <= 1.0
+            || exit_summary.within_solid
+            || exit_summary.start_within_solid)
+            || exit_summary.start_within_solid
         {
-            if exit_summary.entity_hit.is_null() {
+            if exit_summary.entity.is_null() {
                 return true;
             }
 
             continue;
         }
 
-        if (exit_summary.surface.flags & SURF_NODRAW as u16) != 0 {
+        if exit_summary.has_flag(SurfaceFlags::NO_DRAW) {
             continue;
         }
 
-        if exit_summary.plane.normal.dot(direction) <= 1.0 {
-            let fraction = exit_summary.fraction * 4.0;
+        if let Some(plane) = exit_summary.plane() {
+            if plane.normal.dot(direction) <= 1.0 {
+                let fraction = exit_summary.fraction * STEP_F32;
 
-            *end = *end - (direction * Vec3::splat(fraction));
+                *end = *end - (direction * Vec3::splat(fraction));
 
-            return true;
+                return true;
+            }
         }
     }
 
     false
-}
-
-#[derive(Debug)]
-pub struct ShotData {
-    pub source: Vec3,
-    pub enter_summary: Summary,
-    pub direction: Vec3,
-    pub filter: Option<Entity>,
-    pub trace_length: f32,
-    pub trace_length_remaining: f32,
-    pub current_damage: f32,
-    pub penetrate_count: i32,
 }
 
 impl ShotData {
@@ -118,7 +125,7 @@ impl ShotData {
             source: Vec3::zero(),
             enter_summary: Summary::new(),
             direction: Vec3::zero(),
-            filter: None,
+            filter: ptr::null(),
             trace_length: 0.0,
             trace_length_remaining: 0.0,
             current_damage: 0.0,
@@ -126,12 +133,10 @@ impl ShotData {
         }
     }
 
-    pub fn handle_bullet_penetration(&mut self, weapon: &Weapon) -> bool {
-        let global = Global::handle();
-        let surface = match global
-            .physics()
-            .query(self.enter_summary.surface.properties as i32)
-        {
+    pub fn handle_bullet_penetration(&mut self, weapon: &Entity) -> bool {
+        let physics = &*state::physics().cast::<Physics>();
+
+        let surface = match physics.query(self.enter_summary.surface.properties as i32) {
             Some(surface) => surface,
             None => return true,
         };
@@ -154,7 +159,7 @@ impl ShotData {
         let mut exit_summary = Summary::new();
 
         if !trace_to_exit(
-            /* start */ self.enter_summary.end,
+            /* start */ self.enter_summary.hit_pos,
             /* direction */ self.direction,
             /* enter_summary */ &self.enter_summary,
             /* exit_summary */ &mut exit_summary,
@@ -193,7 +198,7 @@ impl ShotData {
         let v35 = self.current_damage * final_damage_modifier
             + v34 * 3.0 * f32::max(0.0, (3.0 / weapon.penetration()) * 1.25);
 
-        let mut thickness = (exit_summary.end - self.enter_summary.end).magnitude();
+        let mut thickness = (exit_summary.hit_pos - self.enter_summary.hit_pos).magnitude();
 
         thickness = (thickness * thickness * v34) / 24.0;
 
@@ -211,70 +216,48 @@ impl ShotData {
             return false;
         }
 
-        self.source = exit_summary.end;
+        self.source = exit_summary.hit_pos;
         self.penetrate_count -= 1;
 
         // cant shoot through this
         true
     }
 
-    pub fn simulate_shot(&mut self, local_player: &Player, weapon: &Weapon) -> bool {
-        let global = Global::handle();
-
+    pub fn simulate_shot(&mut self, local: &Entity, weapon: &Entity) -> bool {
+        let trace = &*state::trace().cast::<Trace>();
         let weapon_damage = weapon.damage();
         let weapon_range = weapon.range();
         let weapon_range_modifier = weapon.range_modifier();
-        //let weapon_armor_ratio = weapon.armor_ratio();
 
         self.penetrate_count = 4;
         self.trace_length = 0.0;
         self.current_damage = weapon_damage;
 
         while self.penetrate_count > 0 && self.current_damage >= 1.0 {
-            println!("current_damage = {}", self.current_damage);
-
             self.trace_length_remaining = weapon_range - self.trace_length;
 
             let end = self.source + self.direction * Vec3::splat(self.trace_length_remaining);
-            let new_end = end + self.direction * Vec3::splat(4.0);
+            let new_end = end + self.direction * STEP_VEC;
 
-            global.ray_tracer().trace_mut(
-                &Ray::new(self.source, end),
-                Contents::new().mask_shot(),
-                Some(&local_player.as_entity()),
-                &mut self.enter_summary,
+            trace.trace(Ray::new(self.source, end), Mask::SHOT.0, skip(local));
+
+            trace.trace(
+                Ray::new(self.source, new_end),
+                Mask::SHOT.0,
+                skip(self.filter),
             );
 
-            global.ray_tracer().trace_mut(
-                &Ray::new(self.source, new_end),
-                Contents::new().mask_shot(),
-                self.filter.as_ref(),
-                &mut self.enter_summary,
-            );
-
-            global.ray_tracer().trace_mut(
-                &Ray::new(self.source, new_end),
-                Contents::new().mask_shot(),
-                Some(&local_player.as_entity()),
-                &mut self.enter_summary,
-            );
+            trace.trace(Ray::new(self.source, new_end), Mask::SHOT.0, skip(local));
 
             if self.enter_summary.fraction == 1.0 {
                 break;
             }
 
             if self.enter_summary.hit_group.is_hit() {
-                //self.enter_summary.hit_group.damage_multipler(),
-                //self.en
-                //weapon.armor_ratio()
-                //scaleDamage(shotData.enterTrace.hitgroup, player, info->weaponArmorRatio(), shotData.currentDamage);
-
                 return true;
             }
 
-            //if !self.handle_bullet_penetration(weapon) {
             break;
-            //}
         }
 
         false
@@ -308,11 +291,11 @@ fn angle_vector(angle: &Vec3, forward: &mut Vec3) {
     forward.z = -x_sin;
 }
 
-fn get_damage(local_player: &Player, weapon: &Weapon, destination: Vec3) -> f32 {
+fn get_damage(local: &Entity, weapon: &Entity, destination: Vec3) -> f32 {
     let mut shot_data = ShotData::new();
 
-    shot_data.source = local_player.eye_origin();
-    shot_data.filter = Some(unsafe { Entity::new_unchecked(local_player.as_ptr() as *mut _) });
+    shot_data.source = local.eye_origin();
+    shot_data.filter = local;
 
     let angle = calculate_angle(shot_data.source, destination);
 
@@ -320,7 +303,7 @@ fn get_damage(local_player: &Player, weapon: &Weapon, destination: Vec3) -> f32 
 
     shot_data.direction = shot_data.direction.normalize();
 
-    if shot_data.simulate_shot(local_player, weapon) {
+    if shot_data.simulate_shot(local, weapon) {
         shot_data.current_damage
     } else {
         -1.0

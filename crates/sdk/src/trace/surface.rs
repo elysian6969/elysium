@@ -1,5 +1,6 @@
+use super::SurfaceFlags;
+
 /// The surface hit by a trace.
-#[derive(Debug)]
 #[repr(C)]
 pub struct Surface {
     /// The name of the surface.
@@ -11,5 +12,11 @@ pub struct Surface {
     /// Flags of the surface.
     ///
     /// Used to filter unwanted surfaces.
-    pub flags: u16,
+    pub flags: SurfaceFlags,
+}
+
+impl Surface {
+    pub fn has_flag(&self, flag: SurfaceFlags) -> bool {
+        (self.flags & flag) != SurfaceFlags::EMPTY
+    }
 }

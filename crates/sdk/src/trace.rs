@@ -11,8 +11,8 @@ pub use mask::Mask;
 pub use plane::Plane;
 pub use ray::Ray;
 pub use summary::Summary;
-pub use surf::Surf;
 pub use surface::Surface;
+pub use surface_flags::SurfaceFlags;
 pub use tex::Tex;
 
 mod contents;
@@ -23,14 +23,14 @@ mod mask;
 mod plane;
 mod ray;
 mod summary;
-mod surf;
 mod surface;
+mod surface_flags;
 mod tex;
 
 /// A trait used to customize what a trace will yield.
 pub trait Filter {
-    fn should_hit_entity(&self, entity: *const (), mask: i32) -> bool;
-    fn get_trace_kind(&self) -> TraceKind;
+    fn should_hit(&self, entity: *const u8, mask: i32) -> bool;
+    fn trace_kind(&self) -> TraceKind;
 }
 
 #[repr(C)]
@@ -39,21 +39,21 @@ struct VTable {
         this: *const Trace,
         position: *const Vec3,
         contents: u32,
-        entities: *const *const (),
+        entities: *const *const u8,
     ) -> u32,
     _pad0: vtable::Pad<3>,
     clip_to_entity: unsafe extern "thiscall" fn(
         this: *const Trace,
         ray: *const Ray,
         contents: u32,
-        filter: *const (),
-        entities: *const (),
+        filter: *const u8,
+        entities: *const u8,
     ),
     trace: unsafe extern "thiscall" fn(
         this: *const Trace,
         ray: *const Ray,
         contents: u32,
-        filter: *const (),
+        filter: *const u8,
         summary: *mut Summary,
     ),
 }
@@ -66,12 +66,12 @@ pub struct Trace {
 
 impl Trace {
     /// Return contents at a given point.
-    pub fn point_contents(&self, position: Vec3, contents: u32, entities: *const *const ()) -> u32 {
+    pub fn point_contents(&self, position: Vec3, contents: u32, entities: *const *const u8) -> u32 {
         unsafe { (self.vtable.point_contents)(self, &position, contents, entities) }
     }
 
     /// Clip to the provided entity.
-    pub fn clip_to_entity<F>(&self, ray: Ray, contents: u32, filter: F, entities: *const ())
+    pub fn clip_to_entity<F>(&self, ray: Ray, contents: u32, filter: F, entities: *const u8)
     where
         F: Filter,
     {

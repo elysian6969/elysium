@@ -181,16 +181,16 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
     }
 
     // 89.0 = down, -89.0 = up
-    let pitch = command.view_angle.x;
+    let pitch = 89.0;
 
     // 180.0 for backwards
-    let yaw_base = 0.0;
+    let yaw_base = 180.0;
 
     // roll base
     let roll_base = 0.0;
 
     // how much to jitter yaw
-    let jitter_yaw = 0.0;
+    let jitter_yaw = 12.0;
 
     // how much to jitter roll
     let jitter_roll = 50.0;
@@ -198,11 +198,9 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
     // note: remember, desync isnt static, nor can it always be 58.0;
     let desync = 58.0;
 
-    //command.view_angle.x = pitch;
-    //command.view_angle.y += yaw_base - desync + (jitter_yaw * side);
-    //command.view_angle.z += roll_base + jitter_roll * side;
-
-    command.view_angle.y -= desync;
+    command.view_angle.x = pitch;
+    command.view_angle.y += yaw_base - desync + (jitter_yaw * side);
+    command.view_angle.z += roll_base + jitter_roll * side;
 
     if *send_packet {
         command.view_angle.y += desync;
@@ -211,6 +209,7 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
     }
 
     if do_attack {
+        *send_packet = true;
         command.view_angle = *state::view_angle();
     }
 
@@ -224,9 +223,11 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
     let globals = &*state::globals().cast::<Globals>();
     let input = &mut *state::input().as_mut().cast::<Input>();
 
-    /*let players = &mut *state::players();
+    let players = &mut *state::players();
     let renderable = &*<*const Entity>::byte_add(local, 8).cast::<Renderable>();
-    let networkable = &*<*const Entity>::byte_add(local, 16).cast::<Networkable>();
+    let networkable = <*const Entity>::byte_add(local, 16).cast::<Networkable>();
+    println!("{networkable:?}");
+    let networkable = &*networkable;
     let local_index = networkable.index();
 
     // iterate player list
@@ -245,10 +246,9 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
             continue;
         }
 
-        let renderable = &*<*const Entity>::byte_add(local, 8).cast::<Renderable>();
-        let networkable = &*<*const Entity>::byte_add(local, 16).cast::<Networkable>();
-
         let entity = &*entity.cast::<Entity>();
+        let renderable = &*<*const Entity>::byte_add(entity, 8).cast::<Renderable>();
+        let networkable = &*<*const Entity>::byte_add(entity, 16).cast::<Networkable>();
 
         // skip dormant
         if networkable.is_dormant() {
@@ -259,11 +259,11 @@ unsafe fn do_create_move(command: &mut Command, local: &Entity, send_packet: &mu
         renderable.setup_bones(&mut bones[0..128], 0x00000100, globals.current_time);
         renderable.setup_bones(&mut bones[0..128], 0x000FFF00, globals.current_time);
 
-        /*let eye_origin = local.eye_origin();
+        let eye_origin = local.eye_origin();
         let bone_origin = bones.get_origin(8).unwrap_unchecked();
 
-        command.view_angle = calculate_angle(eye_origin, bone_origin);*/
-    }*/
+        command.view_angle = calculate_angle(eye_origin, bone_origin);
+    }
 
     fix_movement(command, *state::view_angle());
     leg_animation_walk(command);

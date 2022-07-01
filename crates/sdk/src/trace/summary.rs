@@ -1,4 +1,4 @@
-use super::{Contents, Displacement, HitGroup, Plane, Surface};
+use super::{Contents, Displacement, HitGroup, Plane, Surface, SurfaceFlags};
 use elysium_math::Vec3;
 
 /// The summary of a trace.
@@ -54,7 +54,7 @@ pub struct Summary {
     pub world_surface_index: u16,
 
     /// The entity hit (if present).
-    pub entity: *const (),
+    pub entity: *const u8,
 
     /// The hitbox hit.
     pub hitbox: i32,
@@ -80,5 +80,10 @@ impl Summary {
     /// Returns `true` if it hit something.
     pub fn did_hit(&self) -> bool {
         !self.entity.is_null()
+    }
+
+    /// convenience method for `surface.has_flag()`
+    pub fn has_flag(&self, flag: SurfaceFlags) -> bool {
+        self.surface.has_flag(flag)
     }
 }

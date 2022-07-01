@@ -3,7 +3,7 @@ use core::ops;
 
 /// Mask for a trace.
 #[repr(C)]
-pub struct Mask(u32);
+pub struct Mask(pub u32);
 
 impl Mask {
     pub const ALL: Self = Self(0xFFFFFFFF);
